@@ -22,7 +22,7 @@ def process_page_with_ocr(model, tokenizer, page_fitz, page_num, output_dir):
     temp_img_name = f"temp_page_{page_num}.png"
     temp_img_path = os.path.join(output_dir, temp_img_name)
     
-    mat = fitz.Matrix(300 / 72, 300 / 72)
+    mat = fitz.Matrix(200 / 72, 200 / 72)
     pix = page_fitz.get_pixmap(matrix=mat)
     pix.save(temp_img_path)
     
@@ -35,7 +35,7 @@ def process_page_with_ocr(model, tokenizer, page_fitz, page_num, output_dir):
         base_size=1024, 
         image_size=640, 
         crop_mode=True,
-        max_length=32768,
+        max_length=4096,
         no_repeat_ngram_size=35, 
         ngram_window=128,
         save_results=True,  
@@ -69,3 +69,53 @@ def process_page_with_ocr(model, tokenizer, page_fitz, page_num, output_dir):
     print(f"   -> 🧠 OCR Success! Complex content extracted as Markdown string.")
     
     return extracted_content
+
+
+# ============================================================
+# 把下面这个函数【追加】到 PDF-scanning/run_baidu_ocr_pdf.py 末尾
+# 不要改动已有的 load_baidu_ocr_model / process_page_with_ocr
+# ============================================================
+import os
+import glob
+
+
+def process_single_image(model, tokenizer, image_path, ocr_work_dir):
+    """
+    用【已加载好的】model/tokenizer 直接识别一张图片，返回识别出的文本。
+    图片本身就是"一页"，不需要 fitz/pdfplumber 解析，直接喂 infer。
+    参数接口对齐你 run_baidu_unlimited_ocr 里用的 model.infer(...)。
+    """
+    out_dir = os.path.join(ocr_work_dir, "img_ocr_tmp")
+    os.makedirs(out_dir, exist_ok=True)
+
+    with torch.inference_mode():
+        result = model.infer(
+            tokenizer,
+            prompt="<image>document parsing.",
+            image_file=image_path,
+            output_path=out_dir,
+            base_size=1024,
+            image_size=640,
+            crop_mode=True,
+            max_length=4096,
+            no_repeat_ngram_size=35,
+            ngram_window=128,
+            save_results=True,
+        )
+
+    # infer 可能直接返回文本，也可能只把结果写进 output_path。两种都兜住：
+    if result and isinstance(result, str) and result.strip():
+        return result.strip()
+
+    # 兜底：从 output_path 里把最新生成的文本文件读出来
+    txt_files = glob.glob(os.path.join(out_dir, "*.txt")) + \
+                glob.glob(os.path.join(out_dir, "*.md"))
+    if txt_files:
+        latest = max(txt_files, key=os.path.getmtime)
+        try:
+            with open(latest, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"   ⚠️ 读取 OCR 结果文件失败: {e}")
+
+    return ""
